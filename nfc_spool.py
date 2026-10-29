@@ -1,17 +1,19 @@
 # Moonraker component: tap an NFC tag -> look up spool in Spoolman ->
 # tell Happy Hare which spool to assign to the next gate you load.
 #
-# Install: symlink into moonraker/components/ (see README.md).
-# moonraker.conf:
+# Installed by install.sh (symlinked into moonraker/components/).
+# moonraker.conf (written by install.sh):
 #   [nfc_spool]
 #   spoolman_url: http://localhost:7912
 #   pending_timeout: 20
+#   installed_schema: 2
 #
 # Endpoints:
 #   POST /server/nfc/scan    {"uid": "04:A2:B3:C4"}
 #   GET  /server/nfc/status
 from __future__ import annotations
 import logging
+import os
 import re
 import time
 from typing import TYPE_CHECKING, Any, Dict, Optional
@@ -29,6 +31,16 @@ if TYPE_CHECKING:
     from ..common import WebRequest
 
 UID_RE = re.compile(r"^[0-9A-F]{4,40}$")
+# This file is a symlink into the repo; SCHEMA sits next to the real file.
+REPO_DIR = os.path.dirname(os.path.realpath(__file__))
+
+
+def _required_schema() -> int:
+    try:
+        with open(os.path.join(REPO_DIR, "SCHEMA")) as f:
+            return int(f.read().strip())
+    except Exception:
+        return 1
 
 
 class NfcSpool:
@@ -40,9 +52,22 @@ class NfcSpool:
         # Keep this equal to pending_spool_id_timeout in Happy Hare's
         # mmu_parameters.cfg. It only drives the countdown shown in the UI.
         self.pending_timeout = config.getfloat("pending_timeout", 20., above=0.)
+        self.installed_schema = config.getint("installed_schema", 1)
+        self.required_schema = _required_schema()
+        self.update_required = self.installed_schema < self.required_schema
         self.pending: Optional[Dict[str, Any]] = None
         self.server.register_endpoint("/server/nfc/scan", _POST, self._handle_scan)
         self.server.register_endpoint("/server/nfc/status", _GET, self._handle_status)
+        if self.update_required:
+            msg = (
+                "nfc-spool was updated and needs its installer re-run: "
+                f"{REPO_DIR}/install.sh --update"
+            )
+            logging.warning(msg)
+            try:
+                self.server.add_warning(msg)  # shown in Mainsail's dashboard
+            except Exception:
+                pass
 
     @staticmethod
     def _normalize_uid(raw: str) -> str:
@@ -112,13 +137,19 @@ class NfcSpool:
             "material": info["material"],
             "color_hex": info["color_hex"],
             "seconds_left": max(0, round(info["expires_at"] - time.time(), 1)),
+            "timeout": self.pending_timeout,
         }
 
     async def _handle_status(self, web_request: WebRequest) -> Dict[str, Any]:
         self._expire_if_needed()
-        if self.pending is None:
-            return {"pending": None}
-        return {"pending": self._public(self.pending)}
+        return {
+            "pending": self._public(self.pending) if self.pending else None,
+            "update_required": self.update_required,
+            "schema": {
+                "installed": self.installed_schema,
+                "required": self.required_schema,
+            },
+        }
 
 
 def load_component(config: ConfigHelper) -> NfcSpool:

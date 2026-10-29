@@ -1,15 +1,19 @@
 # nfc-spool
 
-Tap an NFC tag on your phone, Spoolman identifies the spool, and Happy Hare gets
-`MMU_GATE_MAP NEXT_SPOOLID=<id>`. Then you insert the filament and run
-`MMU_PRELOAD` for the gate (the page has a button per gate).
+Scan a spool's NFC tag from Mainsail's dashboard. Spoolman identifies the spool,
+Happy Hare gets `MMU_GATE_MAP NEXT_SPOOLID=<id>`, and you tap the gate you loaded
+it into (`MMU_PRELOAD GATE=n`, the same command Mainsail's gate menu uses).
 
-> **Status:** the installer was tested in a fake Pi layout (stubbed `sudo`,
-> `nginx`, `systemctl`), not on a real printer. The Moonraker component API calls
-> and the `MMU_PRELOAD GATE=` syntax are from memory and docs; check them first
-> (see "Verify before trusting").
+The scanner sits at the top of Mainsail's **Happy Hare (MMU) panel**. It runs
+inside Mainsail itself, so nothing opens in a new tab and it works in the
+installed Mainsail app.
 
-## Quick start (on the Pi, as the printer user, not root)
+> **Status:** the installer and the dashboard card are tested in a fake Pi
+> layout and a mocked browser page built from Mainsail 2.19's panel markup. Not
+> yet tested on a real printer, and nginx's `sub_filter` injection was not run
+> against real nginx.
+
+## Install (on the Pi, as the printer user, not root)
 
 ```
 git clone https://github.com/ItzEarthy/nfc-spool ~/nfc-spool
@@ -18,91 +22,109 @@ cd ~/nfc-spool
 ./install.sh
 ```
 
-Most values are auto-detected. If your Spoolman is not in `moonraker.conf`'s
-`[spoolman]` section, pass it: `./install.sh --spoolman-url http://truenas.lan:7912`.
+Most values are auto-detected. If Spoolman isn't in `moonraker.conf`'s
+`[spoolman]` section, pass it: `./install.sh --spoolman-url http://truenas:7912`.
+
+## Updating
+
+- **Normal updates:** Mainsail -> Machine -> Update Manager -> nfc-spool -> Update.
+  Moonraker restarts and the new version is live.
+- **If Mainsail then shows a warning** "nfc-spool was updated and needs its
+  installer re-run" (or the card shows a banner), run:
+  `~/nfc-spool/install.sh --update`
+- `--update` can also be run any time on its own. It does `git pull`, then re-runs
+  the new installer with your saved settings. It is safe to repeat.
+- **Coming from the first version** (the sidebar "Spool Scan" page): that
+  installer doesn't know `--update`, so run `cd ~/nfc-spool && git pull && ./install.sh`
+  once. It removes the old sidebar link and page config.
+
+How it knows: `SCHEMA` in the repo is bumped whenever an update needs the
+installer, and the installer records the version it applied in `moonraker.conf`.
+
+## Using it
+
+1. In Spoolman (v0.27.0+): open a spool, then Tags, then Add tag.
+2. Open Mainsail over **HTTPS** in Chrome on Android, on the dashboard.
+3. In the Happy Hare panel tap **Scan spool** and hold the tag to the phone.
+4. Insert the filament into a gate and tap that gate's number before the
+   countdown ends. Empty gates are highlighted.
+
+On a desktop or without Web NFC there's no scan button. The section appears
+only while a spool is pending, e.g. one you scanned on your phone. Gate buttons
+are disabled while printing. If the Happy Hare panel is hidden, the scanner floats
+in the corner of the dashboard instead.
 
 ## What the installer does
 
 1. Symlinks `nfc_spool.py` into `~/moonraker/moonraker/components/` and adds it to
-   Moonraker's `.git/info/exclude` so Moonraker's updater doesn't call itself dirty.
-2. Adds a managed `# BEGIN/END nfc-spool` block to `moonraker.conf`:
-   `[nfc_spool]` and an `[update_manager nfc-spool]` entry (so Mainsail's
-   Machine page can update it). Your original is backed up as `moonraker.conf.bak.<time>`.
-3. Writes `web/config.js` (gate count, preload command; gitignored).
-4. Merges a "Spool Scan" entry into `.theme/navi.json` (other entries kept).
-5. Writes an nginx snippet to `/etc/nginx/snippets/nfc-spool.conf` serving `web/`
-   at `/nfc/`, includes it in the Mainsail site, runs `nginx -t`, reloads. If the
-   test fails it restores the site file. Uses `sudo` for this step only.
-6. Restarts Moonraker and checks `/server/nfc/status` answers.
+   Moonraker's `.git/info/exclude`, so Moonraker's own updater doesn't flag it.
+2. Writes a managed `# BEGIN/END nfc-spool` block in `moonraker.conf` with
+   `[nfc_spool]` and `[update_manager nfc-spool]`. The file is backed up first,
+   and only when it actually changes.
+3. Writes `/etc/nginx/snippets/nfc-spool.conf` and includes it in Mainsail's
+   nginx site. The snippet serves `web/` at `/nfc/` and uses `sub_filter` to add
+   `<script src="/nfc/mainsail-nfc.js">` to Mainsail's page. The installer runs
+   `nginx -t` and reloads, and undoes its nginx change if the test fails.
+4. Removes leftovers from older versions (sidebar link, `web/config.js`).
+5. Saves your settings to `.install.conf` (gitignored) for later runs.
+6. Restarts Moonraker, checks the component answers and that Mainsail's page
+   includes the script.
 
-Safe to re-run; it replaces its own block instead of duplicating it.
-
-## Parameters and flags
+## Flags
 
 | Flag | Default | Notes |
 |---|---|---|
-| `--spoolman-url URL` | `server:` in `[spoolman]` of moonraker.conf | **Required** if not auto-detected (prompts if interactive, errors with `--yes`) |
-| `--timeout SEC` | `pending_spool_id_timeout` from `mmu_parameters.cfg`, else 20 | **Must equal Happy Hare's value.** Only drives the UI countdown |
-| `--gates N` | `num_gates` from your Happy Hare config, else 4 | Number of gate buttons. Check it matches your MMU |
-| `--preload-cmd CMD` | `MMU_PRELOAD GATE={gate}` | `{gate}` is replaced by the gate number |
-| `--config-dir DIR` | `~/printer_data/config`, else `~/klipper_config` | Folder with `moonraker.conf` |
+| `--update` | | `git pull`, then re-run with saved settings |
+| `--spoolman-url URL` | `[spoolman] server:` in moonraker.conf | **Required** if not found (prompts if interactive) |
+| `--timeout SEC` | `pending_spool_id_timeout` from `mmu_parameters.cfg`, else 20 | Must equal Happy Hare's value (countdown only) |
+| `--config-dir DIR` | `~/printer_data/config`, else `~/klipper_config` | |
 | `--moonraker-dir DIR` | `~/moonraker` | |
-| `--service NAME` | `moonraker` | systemd unit; change for multi-instance (e.g. `moonraker-1`) |
-| `--moonraker-port PORT` | `7125` | Only for the post-install check |
-| `--nginx-site FILE` | `/etc/nginx/sites-enabled/mainsail` | Site file that serves Mainsail |
+| `--service NAME` | `moonraker` | e.g. `moonraker-1` for multi-instance |
+| `--moonraker-port PORT` | `7125` | Post-install check only |
+| `--nginx-site FILE` | `/etc/nginx/sites-enabled/mainsail` | |
 | `--nginx-snippet-dir DIR` | `/etc/nginx/snippets` | |
-| `--no-nginx` | off | Skip nginx; serve `web/` at `/nfc/` yourself |
-| `--no-update-manager` | off | Skip the update_manager entry |
-| `--no-restart` | off | Don't restart Moonraker or reload nginx |
-| `-y`, `--yes` | off | Never prompt |
-| `--dry-run` | off | Print changes, make none |
+| `--no-nginx` | | Don't touch nginx. You must serve `web/` at `/nfc/` and inject the script yourself |
+| `--no-update-manager` | | Skip the update_manager entry |
+| `--no-restart` | | Don't restart Moonraker or reload nginx |
+| `--reset` | | Ignore saved settings and auto-detect again |
+| `-y`, `--yes` | | Never prompt |
+| `--dry-run` | | Print changes, make none |
 | `--uninstall` | | Remove everything the installer added (repo folder is kept) |
 
-Re-run the installer after changing any value; it rewrites the block and `config.js`.
+Saved settings are reused on every run; a flag overrides the saved value and
+becomes the new saved value. Gate count and preload command are no longer
+settings: they come live from Happy Hare.
 
-## After installing
-
-1. In Spoolman (v0.27.0+): open a spool, Tags, Add tag (one per physical tag).
-2. Mainsail must be reachable over **HTTPS** or Web NFC won't work. If HTTPS is
-   terminated elsewhere (Cloudflare tunnel, a reverse proxy) pointing at the Pi's
-   port 80, `/nfc/` works through it with no extra setup.
-3. On the phone (Chrome, Android, NFC on): `https://<your-host>/nfc/`, or the
-   "Spool Scan" entry in Mainsail's sidebar (hard-refresh once).
-
-## Pieces
+## Files
 
 | File | What it is |
 |---|---|
-| `install.sh` | Installer / uninstaller |
+| `install.sh` | Installer, updater, uninstaller |
 | `nfc_spool.py` | Moonraker component: `POST /server/nfc/scan`, `GET /server/nfc/status` |
-| `web/index.html`, `web/nfc.js` | Phone page: Web NFC read, pending spool + countdown, gate buttons |
-| `navi.json` | Mainsail sidebar entry (merged in by the installer) |
-| `nginx-nfc.conf` | Reference snippet; the installer generates the real one |
+| `web/mainsail-nfc.js` | Script injected into Mainsail; builds the scanner in the MMU panel |
+| `web/index.html` | Notice for anyone who still has the old `/nfc/` link |
+| `SCHEMA` | Bumped when an update needs `install.sh --update` |
 
-Mainsail has no documented custom-panel API, so this is a separate page linked
-from the sidebar, not a card inside the Happy Hare section.
+## Verify after installing
 
-## Verify before trusting
-
-- [ ] `journalctl -u moonraker` shows the component loaded with no errors.
-- [ ] `curl http://localhost:7125/server/nfc/status` returns `{"result": {"pending": null}}`.
-- [ ] `curl -X POST http://localhost:7125/server/nfc/scan -H 'Content-Type: application/json' -d '{"uid":"<linked uid>"}'` returns the spool and the Mainsail console shows `MMU_GATE_MAP NEXT_SPOOLID=...`.
-- [ ] `MMU_PRELOAD GATE=n` is the right syntax for your Happy Hare version (Command Reference); otherwise use `--preload-cmd`.
-- [ ] Spoolman's `GET /api/v1/spool?tag=<uid>` returns the spool.
-- [ ] The UID Chrome reports matches the UID Spoolman stored (link tags from the phone's Add tag dialog to be safe).
+- [ ] `curl http://localhost:7125/server/nfc/status` shows `"update_required": false`.
+- [ ] `curl -s http://localhost/ | grep mainsail-nfc.js` finds the script tag.
+- [ ] On the phone, the Happy Hare panel shows **Scan spool**.
+- [ ] Scanning a linked tag shows the spool and the Mainsail console logs `MMU_GATE_MAP NEXT_SPOOLID=...`.
 
 ## Troubleshooting
 
 | Symptom | Likely cause |
 |---|---|
-| nginx 403/404 on `/nfc/` | nginx's user can't read your home dir: `chmod o+x ~` |
-| "Web NFC is not available" | Not Chrome on Android, or page isn't on HTTPS |
-| "not linked to a spool" | Tag not added in Spoolman, or a different UID was linked |
-| Component didn't answer after install | `journalctl -u moonraker -n 50`; check the `[nfc_spool]` block and Spoolman URL |
-| Happy Hare ignores the spool | `pending_spool_id_timeout` expired before `MMU_PRELOAD`; raise it and `--timeout` together |
+| No Scan spool button on the phone | Page not on HTTPS, or not Chrome on Android. On desktop the button is hidden by design |
+| Section missing everywhere | Script not injected: check `curl -s http://localhost/ \| grep mainsail-nfc`; wrong `--nginx-site`; nginx lacks `sub_filter` (`sudo apt install nginx-full`) |
+| Missing only in the installed Mainsail app | The app cached its start page. Close and reopen it; if still missing, clear the site's data once |
+| `/nfc/mainsail-nfc.js` gives 403 | nginx can't read your home dir: `chmod o+x ~` |
+| "isn't linked to a spool" | Tag not added in Spoolman, or a different UID was linked |
+| Banner/warning: installer re-run needed | `~/nfc-spool/install.sh --update` |
+| Gate tap errors | Happy Hare refused the preload (e.g. filament loaded on a selector MMU); the message shows why |
 
 ## Security
 
-Neither Spoolman nor these endpoints add authentication. Anyone who can reach
-Moonraker can send a scan or a gate command. Keep it on your LAN or behind a VPN,
-and keep Moonraker's `trusted_clients` tight.
+Spoolman and these endpoints have no authentication. Anyone who can reach
+Moonraker can send a scan or gate command. Keep it on your LAN or tailnet.
