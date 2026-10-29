@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spool Scan</title>
+<style>
+  :root { color-scheme: dark light; --pad: 16px; }
+  body { font-family: system-ui, sans-serif; margin: 0; padding: var(--pad); max-width: 480px; margin-inline: auto; }
+  h1 { font-size: 1.25rem; margin: 0 0 12px; }
+  button { font: inherit; padding: 12px 16px; border-radius: 8px; border: 1px solid #888; cursor: pointer; }
+  button.primary { width: 100%; font-weight: 600; }
+  #msg { min-height: 1.4em; margin: 12px 0; }
+  .err { color: #d33; }
+  #card { display: none; border: 1px solid #888; border-radius: 10px; padding: 12px; margin-top: 8px; }
+  #swatch { display: inline-block; width: 18px; height: 18px; border-radius: 50%; border: 1px solid #888; vertical-align: middle; margin-right: 8px; }
+  #bar { height: 6px; background: #8884; border-radius: 3px; margin-top: 10px; overflow: hidden; }
+  #bar > div { height: 100%; background: #4a9; width: 0; transition: width 0.3s linear; }
+  .gates { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .gates button { flex: 1 0 22%; }
+  small { opacity: 0.7; }
+</style>
+</head>
+<body>
+<h1>Spool Scan</h1>
+<button class="primary" id="scan">Start scanning</button>
+<div id="msg"></div>
+
+<div id="card">
+  <div><span id="swatch"></span><strong id="name"></strong></div>
+  <div id="detail"></div>
+  <div id="bar"><div></div></div>
+  <small id="left"></small>
+  <div class="gates" id="gates"></div>
+  <small>Insert filament into a gate, then tap its number to run MMU_PRELOAD for that gate.</small>
+</div>
+
+<script src="nfc.js"></script>
+</body>
+</html>
