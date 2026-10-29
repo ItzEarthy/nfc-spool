@@ -79,7 +79,9 @@ class NfcSpool:
     async def _lookup_spool(self, uid: str) -> Optional[Dict[str, Any]]:
         client = self.server.lookup_component("http_client")
         url = f"{self.spoolman_url}/api/v1/spool?tag={uid}"
-        resp = await client.get(url, connect_timeout=5., request_timeout=5.)
+        resp = await client.get(
+            url, connect_timeout=5., request_timeout=5., enable_cache=False
+        )
         resp.raise_for_status()
         data = resp.json()
         if isinstance(data, list):

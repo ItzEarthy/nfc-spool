@@ -63,8 +63,10 @@ in the corner of the dashboard instead.
    and only when it actually changes.
 3. Writes `/etc/nginx/snippets/nfc-spool.conf` and includes it in Mainsail's
    nginx site. The snippet serves `web/` at `/nfc/` and uses `sub_filter` to add
-   `<script src="/nfc/mainsail-nfc.js">` to Mainsail's page. The installer runs
-   `nginx -t` and reloads, and undoes its nginx change if the test fails.
+   `<script src="/nfc/mainsail-nfc.js">` to Mainsail's page. It also tags the
+   `index.html` revision inside Mainsail's `sw.js`, so browsers holding a cached
+   copy of the page fetch the new one. The installer runs `nginx -t` and reloads,
+   and undoes its nginx change if the test fails.
 4. Removes leftovers from older versions (sidebar link, `web/config.js`).
 5. Saves your settings to `.install.conf` (gitignored) for later runs.
 6. Restarts Moonraker, checks the component answers and that Mainsail's page
@@ -118,7 +120,8 @@ settings: they come live from Happy Hare.
 |---|---|
 | No Scan spool button on the phone | Page not on HTTPS, or not Chrome on Android. On desktop the button is hidden by design |
 | Section missing everywhere | Script not injected: check `curl -s http://localhost/ \| grep mainsail-nfc`; wrong `--nginx-site`; nginx lacks `sub_filter` (`sudo apt install nginx-full`) |
-| Missing only in the installed Mainsail app | The app cached its start page. Close and reopen it; if still missing, clear the site's data once |
+| Missing on a device that used Mainsail before | Mainsail's service worker cached the old page. The installer tags `sw.js` so browsers refetch it: reload twice (accept Mainsail's update prompt if shown). Still missing: clear the site's data once. Check: `curl -s http://localhost/sw.js \| grep -o 'revision:"nfcspool[0-9]*-'` |
+| Happy Hare: `Remote method 'spoolman_push_gate_map' not registered` right after install/update | Moonraker was restarting. Run `MMU_SPOOLMAN SYNC=1` once |
 | `/nfc/mainsail-nfc.js` gives 403 | nginx can't read your home dir: `chmod o+x ~` |
 | "isn't linked to a spool" | Tag not added in Spoolman, or a different UID was linked |
 | Banner/warning: installer re-run needed | `~/nfc-spool/install.sh --update` |

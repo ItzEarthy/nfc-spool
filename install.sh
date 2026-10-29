@@ -270,7 +270,7 @@ nginx_remove() {
   if grep -qF "$INCLUDE_LINE" "$NGINX_SITE"; then
     say "removing nginx include from $NGINX_SITE (sudo)"
     act sudo cp -p "$NGINX_SITE" "$NGINX_SITE.bak.$(date +%Y%m%d-%H%M%S)"
-    act sudo sed -i "\\#$INCLUDE_LINE#d" "$NGINX_SITE"
+    act sudo sed -i --follow-symlinks "\\#$INCLUDE_LINE#d" "$NGINX_SITE"
   fi
   [[ -f "$SNIPPET_FILE" ]] && act sudo rm -f "$SNIPPET_FILE"
   if [[ $DO_RESTART -eq 1 ]]; then act sudo "$NGINX_BIN" -t && act sudo systemctl reload nginx; fi
@@ -367,6 +367,15 @@ location /nfc/ {
 # Adds the scanner card to Mainsail's dashboard.
 sub_filter '</head>' '<script src="/nfc/mainsail-nfc.js" defer></script></head>';
 sub_filter_once on;
+# Mainsail's service worker serves a cached copy of the page from before the
+# script was added. Changing the precache revision of index.html in sw.js makes
+# every browser fetch the page again once. Applies to sw.js only.
+location = /sw.js {
+    sub_filter_types application/javascript text/javascript;
+    sub_filter 'url:"index.html",revision:"' 'url:"index.html",revision:"nfcspool$SCHEMA-';
+    sub_filter_once on;
+    add_header Cache-Control "no-cache";
+}
 EOF
   if [[ -f "$SNIPPET_FILE" ]] && cmp -s "$SNIPPET_TMP" "$SNIPPET_FILE"; then
     say "nginx snippet already up to date"
@@ -381,7 +390,7 @@ EOF
     say "nginx include already present"
   elif grep -qE '^[[:space:]]*location[[:space:]]+/[[:space:]]*\{' "$NGINX_SITE"; then
     act sudo cp -p "$NGINX_SITE" "$NGINX_SITE.bak.$(date +%Y%m%d-%H%M%S)"
-    act sudo sed -i -E "0,/^([[:space:]]*)location[[:space:]]+\\/[[:space:]]*\\{/s||\\1$INCLUDE_LINE\n&|" "$NGINX_SITE"
+    act sudo sed -i --follow-symlinks -E "0,/^([[:space:]]*)location[[:space:]]+\\/[[:space:]]*\\{/s||\\1$INCLUDE_LINE\n&|" "$NGINX_SITE"
     SITE_CHANGED=1
   else
     warn "couldn't find 'location / {' in $NGINX_SITE. Add this line inside its server block yourself:"
@@ -442,7 +451,15 @@ if [[ $DRY_RUN -eq 0 && $DO_RESTART -eq 1 ]] && command -v curl >/dev/null; then
       warn "Mainsail's page doesn't include the scanner script yet. Check that $NGINX_SITE is"
       warn "the site actually serving Mainsail, and that no location there sets its own sub_filter."
     fi
+    if curl -fsS "http://127.0.0.1/sw.js" 2>/dev/null | grep -q "revision:\"nfcspool$SCHEMA-"; then
+      say "Mainsail's service worker will refresh cached pages"
+    else
+      warn "couldn't tag Mainsail's sw.js, so browsers that opened Mainsail before may keep a"
+      warn "cached page without the scanner. Clear that site's data in the browser once."
+    fi
   fi
+  say "Moonraker restarted. If Happy Hare logged a Spoolman 'not registered' error just now,"
+  say "that was the restart gap; run MMU_SPOOLMAN SYNC=1 in the console to re-sync."
 fi
 
 cat <<EOF
@@ -451,9 +468,9 @@ Done (schema $SCHEMA). Next:
   1. Spoolman (v0.27.0+): link each tag (spool -> Tags -> Add tag).
   2. Open Mainsail over HTTPS on an Android phone in Chrome. The "Scan spool"
      button is at the top of the Happy Hare (MMU) panel on the dashboard.
-  3. If you use Mainsail as an installed app and don't see it, close and reopen
-     the app; if it still isn't there, clear the site's data once (the app caches
-     its start page).
+  3. Browsers that opened Mainsail before refresh their cached copy on their own:
+     Mainsail reloads once (it may show an "update available" prompt; accept it).
+     If the button still isn't there after two reloads, clear the site's data once.
 
 Updating later: Mainsail's Machine page updates nfc-spool like any other
 component. If it then shows an "nfc-spool ... install.sh --update" warning,
