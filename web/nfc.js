@@ -4,8 +4,11 @@
 (function () {
   "use strict";
 
-  // Adjust to match your MMU (Tradrack gate count).
-  var GATE_COUNT = 4;
+  // Written by install.sh into web/config.js (gitignored). Defaults apply
+  // if that file is missing.
+  var CFG = window.NFC_CONFIG || {};
+  var GATE_COUNT = parseInt(CFG.gates, 10) || 4;
+  var PRELOAD_CMD = CFG.preload || "MMU_PRELOAD GATE={gate}";
 
   var els = {
     scan: document.getElementById("scan"),
@@ -111,7 +114,7 @@
   }
 
   async function preload(gate) {
-    var script = "MMU_PRELOAD GATE=" + gate;
+    var script = PRELOAD_CMD.replace("{gate}", String(gate));
     say("Running " + script + " ...");
     try {
       await api("POST", "/printer/gcode/script", { script: script });
