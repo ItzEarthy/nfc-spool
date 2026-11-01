@@ -11,6 +11,7 @@
 # Endpoints:
 #   POST /server/nfc/scan    {"uid": "04:A2:B3:C4"}
 #   GET  /server/nfc/status
+#   POST /server/nfc/select  {"spool_id": 12}   (pick one when a tag is on a filament)
 from __future__ import annotations
 import logging
 import os
@@ -43,6 +44,12 @@ def _required_schema() -> int:
         return 1
 
 
+class SpoolmanHTTPError(Exception):
+    def __init__(self, code: int, msg: str) -> None:
+        super().__init__(msg)
+        self.code = code
+
+
 class NfcSpool:
     def __init__(self, config: ConfigHelper) -> None:
         self.server = config.get_server()
@@ -55,8 +62,10 @@ class NfcSpool:
         self.required_schema = _required_schema()
         self.update_required = self.installed_schema < self.required_schema
         self.pending: Optional[Dict[str, Any]] = None
+        self.choices: Optional[Dict[str, Any]] = None
         self.server.register_endpoint("/server/nfc/scan", _POST, self._handle_scan)
         self.server.register_endpoint("/server/nfc/status", _GET, self._handle_status)
+        self.server.register_endpoint("/server/nfc/select", _POST, self._handle_select)
         if self.update_required:
             msg = (
                 "nfc-spool was updated and needs its installer re-run: "
@@ -86,25 +95,39 @@ class NfcSpool:
             rest = rest[:-4]
         return f"{scheme}://{rest}"
 
-    async def _lookup_spool(self, uid: str) -> Optional[Dict[str, Any]]:
+    async def _request(self, method: str, path: str, body: Any = None) -> Any:
         client = self.server.lookup_component("http_client")
-        url = f"{self.spoolman_url}/api/v1/spool?tag={uid}"
-        resp = await client.get(
-            url, connect_timeout=5., request_timeout=5., enable_cache=False
-        )
+        url = f"{self.spoolman_url}{path}"
+        resp = await client.request(
+            method, url, body, connect_timeout=5., request_timeout=5.)
         if resp.has_error():
-            err = getattr(resp, "error", None) or getattr(resp, "_error", None)
+            err = getattr(resp, "error", None)
             code = getattr(resp, "status_code", 0)
-            if code in (400, 404, 422):
-                raise Exception(
-                    f"Spoolman at {self.spoolman_url} answered {code}. "
-                    "Tag lookup needs Spoolman v0.27.0 or newer.")
+            if code:
+                raise SpoolmanHTTPError(code, f"Spoolman answered {code} for {path}")
             raise Exception(f"can't reach Spoolman at {self.spoolman_url} "
                             f"({type(err).__name__}: {err})")
-        data = resp.json()
-        if isinstance(data, list):
-            return data[0] if data else None
-        return data or None
+        return resp.json()
+
+    async def _resolve(self, uid: str) -> Dict[str, Any]:
+        """Return {"spool": {...}} | {"filament": {...}, "spools": [...]} | {}."""
+        try:
+            scan = await self._request(
+                "POST", "/api/v1/tag/scan",
+                {"uid": uid, "reader_id": "nfc-spool", "name": "Mainsail (nfc-spool)"})
+        except SpoolmanHTTPError as e:
+            if e.code not in (404, 405):
+                raise
+            # Older Spoolman without /tag/scan: spool tags only.
+            data = await self._request("GET", f"/api/v1/spool?tag={uid}")
+            return {"spool": data[0]} if data else {}
+        if scan.get("spool"):
+            return {"spool": scan["spool"]}
+        fid = scan.get("matched_filament_id")
+        if fid is None:
+            return {}
+        spools = await self._request("GET", f"/api/v1/spool?filament.id={int(fid)}")
+        return {"filament": scan.get("filament") or {"id": fid}, "spools": spools or []}
 
     @staticmethod
     def _describe(spool: Dict[str, Any]) -> Dict[str, Any]:
@@ -122,19 +145,17 @@ class NfcSpool:
         if self.pending and time.time() >= self.pending["expires_at"]:
             self.pending = None
 
-    async def _handle_scan(self, web_request: WebRequest) -> Dict[str, Any]:
-        raw = web_request.get_str("uid")
-        try:
-            uid = self._normalize_uid(raw)
-        except ValueError:
-            raise self.server.error("Invalid tag UID", 400)
-        try:
-            spool = await self._lookup_spool(uid)
-        except Exception as e:
-            logging.exception("NFC: Spoolman lookup failed")
-            raise self.server.error(f"Spoolman lookup failed: {e}", 502)
-        if spool is None:
-            return {"uid": uid, "matched": False}
+    @staticmethod
+    def _choice(spool: Dict[str, Any]) -> Dict[str, Any]:
+        rem = spool.get("remaining_weight")
+        return {
+            "spool_id": spool.get("id"),
+            "remaining": None if rem is None else round(rem),
+            "location": spool.get("location"),
+            "lot_nr": spool.get("lot_nr"),
+        }
+
+    async def _set_pending(self, spool: Dict[str, Any], uid: Optional[str]) -> Dict[str, Any]:
         info = self._describe(spool)
         klippy_apis = self.server.lookup_component("klippy_apis")
         try:
@@ -146,8 +167,58 @@ class NfcSpool:
         info["uid"] = uid
         info["expires_at"] = time.time() + self.pending_timeout
         self.pending = info
-        logging.info(f"NFC: pending spool {info['spool_id']} for tag {uid}")
+        self.choices = None
+        logging.info(f"NFC: pending spool {info['spool_id']} (tag {uid})")
         return {"uid": uid, "matched": True, **self._public(info)}
+
+    async def _handle_scan(self, web_request: WebRequest) -> Dict[str, Any]:
+        raw = web_request.get_str("uid")
+        try:
+            uid = self._normalize_uid(raw)
+        except ValueError:
+            raise self.server.error("Invalid tag UID", 400)
+        try:
+            found = await self._resolve(uid)
+        except Exception as e:
+            logging.exception("NFC: Spoolman lookup failed")
+            raise self.server.error(f"Spoolman lookup failed: {e}", 502)
+        if "spool" in found:
+            return await self._set_pending(found["spool"], uid)
+        if "filament" in found:
+            fil = found["filament"]
+            spools = found["spools"]
+            if len(spools) == 1:
+                return await self._set_pending(spools[0], uid)
+            if not spools:
+                return {"uid": uid, "matched": False, "reason": "no_spools",
+                        "filament_name": fil.get("name"), "filament_id": fil.get("id")}
+            # Several active spools of this filament: let the user pick.
+            self.choices = {
+                "uid": uid, "expires_at": time.time() + 120,
+                "filament": self._describe({"filament": fil}),
+                "spools": [self._choice(sp) for sp in spools][:24],
+            }
+            return {"uid": uid, "matched": False, "reason": "choose",
+                    "choose": self._public_choices()}
+        return {"uid": uid, "matched": False, "reason": "unlinked"}
+
+    async def _handle_select(self, web_request: WebRequest) -> Dict[str, Any]:
+        spool_id = web_request.get_int("spool_id")
+        try:
+            spool = await self._request("GET", f"/api/v1/spool/{spool_id}")
+        except Exception as e:
+            raise self.server.error(f"Spoolman lookup failed: {e}", 502)
+        uid = self.choices["uid"] if self.choices else None
+        return await self._set_pending(spool, uid)
+
+    def _public_choices(self) -> Optional[Dict[str, Any]]:
+        c = self.choices
+        if not c or time.time() >= c["expires_at"]:
+            self.choices = None
+            return None
+        f = c["filament"]
+        return {"name": f["name"], "vendor": f["vendor"], "material": f["material"],
+                "color_hex": f["color_hex"], "spools": c["spools"]}
 
     def _public(self, info: Dict[str, Any]) -> Dict[str, Any]:
         return {
@@ -164,6 +235,7 @@ class NfcSpool:
         self._expire_if_needed()
         return {
             "pending": self._public(self.pending) if self.pending else None,
+            "choose": self._public_choices(),
             "update_required": self.update_required,
             "schema": {
                 "installed": self.installed_schema,

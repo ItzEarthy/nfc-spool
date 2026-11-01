@@ -43,7 +43,9 @@ installer, and the installer records the version it applied in `moonraker.conf`.
 
 ## Using it
 
-1. In Spoolman (v0.27.0+): open a spool, then Tags, then Add tag.
+1. In Spoolman (v0.27.0+), link the tag to the **spool** (spool page, Tags, Add tag).
+   A tag linked to the **filament** also works: if that filament has one active
+   spool it's used directly, otherwise the card lists its spools to pick from.
 2. Open Mainsail over **HTTPS** in Chrome on Android, on the dashboard.
 3. In the Happy Hare panel tap **Scan spool** and hold the tag to the phone.
 4. Insert the filament into a gate and tap that gate's number before the
@@ -123,7 +125,9 @@ settings: they come live from Happy Hare.
 | Missing on a device that used Mainsail before | Mainsail's service worker cached the old page. The installer tags `sw.js` so browsers refetch it: reload twice (accept Mainsail's update prompt if shown). Still missing: clear the site's data once. Check: `curl -s http://localhost/sw.js \| grep -o 'revision:"nfcspool[0-9]*-'` |
 | Happy Hare: `Remote method 'spoolman_push_gate_map' not registered` right after install/update | Moonraker was restarting. Run `MMU_SPOOLMAN SYNC=1` once |
 | `/nfc/mainsail-nfc.js` gives 403 | nginx can't read your home dir: `chmod o+x ~` |
-| "isn't linked to a spool" | Tag not added in Spoolman, or a different UID was linked |
+| "isn't linked in Spoolman" | Tag not added in Spoolman, or a different UID was linked (add it from the phone with "Read a tag with this phone") |
+| "no active spools" | Tag is on a filament whose spools are all archived or missing |
+| "can't reach Spoolman at ..." | Pi can't reach Spoolman: `curl http://<spoolman>:7912/api/v1/info` from the Pi |
 | Banner/warning: installer re-run needed | `~/nfc-spool/install.sh --update` |
 | Gate tap errors | Happy Hare refused the preload (e.g. filament loaded on a selector MMU); the message shows why |
 

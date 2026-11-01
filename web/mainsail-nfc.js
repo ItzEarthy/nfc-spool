@@ -16,6 +16,7 @@
 
   var state = {
     pending: null,          // from /server/nfc/status (our countdown)
+    choose: null,           // tag is on a filament with several spools
     updateRequired: false,
     mmu: null,              // Happy Hare status (num_gates, gate_status, ...)
     printing: false,
@@ -94,6 +95,7 @@
     try {
       var s = await getJson("/server/nfc/status");
       state.pending = s.pending;
+      state.choose = s.choose || null;
       state.updateRequired = !!s.update_required;
     } catch (e) {
       state.pending = null;
@@ -155,7 +157,18 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ uid: uid }),
       });
-      if (!r.matched) return say("Tag " + r.uid + " isn't linked to a spool in Spoolman.", true);
+      if (!r.matched) {
+        if (r.reason === "choose") {
+          state.choose = r.choose;
+          return say("This tag is on the filament, not a spool. Tap the spool you are loading.");
+        }
+        if (r.reason === "no_spools") {
+          return say("Tag is on filament \"" + (r.filament_name || "#" + r.filament_id) +
+            "\", which has no active spools in Spoolman.", true);
+        }
+        return say("Tag " + r.uid + " isn't linked in Spoolman. Add it under the spool's Tags.", true);
+      }
+      state.choose = null;
       state.pending = r;
       if (navigator.vibrate) navigator.vibrate(60);
       say("Insert the filament into a gate, then tap that gate's number.");
@@ -185,6 +198,23 @@
     }
   }
 
+  async function selectSpool(id) {
+    say("Using spool #" + id + "...");
+    try {
+      var r = await getJson("/server/nfc/select", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ spool_id: id }),
+      });
+      state.choose = null;
+      state.pending = r;
+      say("Insert the filament into a gate, then tap that gate's number.");
+      poll();
+    } catch (e) {
+      say(e.message, true);
+    }
+  }
+
   async function preload(gate) {
     state.busyGate = gate;
     say("Preloading gate " + gate + "...");
@@ -208,6 +238,7 @@
     if (!b || b.disabled) return;
     if (b.dataset.act === "scan") toggleScan();
     else if (b.dataset.gate !== undefined) preload(parseInt(b.dataset.gate, 10));
+    else if (b.dataset.spool !== undefined) selectSpool(parseInt(b.dataset.spool, 10));
     else if (b.dataset.act === "close") { closeFloat(); }
   });
 
@@ -215,7 +246,7 @@
   // Always shown inside the MMU panel (so it's clear the add-on loaded).
   // The floating fallback only appears when there's something to act on.
   function visible() {
-    return !!floatBox || isInPanel() || HAS_NFC || !!pendingSpool() || state.updateRequired;
+    return !!floatBox || isInPanel() || HAS_NFC || !!pendingSpool() || !!state.choose || state.updateRequired;
   }
   function isInPanel() {
     var p = root.parentNode && root.parentNode.parentNode;
@@ -251,6 +282,22 @@
     }
     if (floatBox) html += '<span style="flex:1"></span>' + btn("Close", 'data-act="close"', { size: "x-small" });
     html += "</div>";
+
+    var c = !p && state.choose;
+    if (c) {
+      html += '<div class="nfc-row" style="margin-top:8px">';
+      html += '<span class="nfc-swatch" style="background:' + (c.color_hex ? "#" + esc(c.color_hex) : "transparent") + '"></span>';
+      html += '<span class="nfc-spool-name">' + esc(c.name) + "</span>";
+      var csub = [c.vendor, c.material].filter(Boolean).join(" \u00b7 ");
+      if (csub) html += ' <span class="nfc-sub">' + esc(csub) + "</span>";
+      html += "</div><div class=\"nfc-gates\">";
+      c.spools.forEach(function (sp) {
+        var label = "#" + sp.spool_id + (sp.remaining != null ? " \u00b7 " + sp.remaining + "g" : "");
+        var tip = [sp.location, sp.lot_nr ? "lot " + sp.lot_nr : ""].filter(Boolean).join(", ");
+        html += btn(label, 'data-spool="' + esc(sp.spool_id) + '" title="' + esc(tip) + '"', {});
+      });
+      html += "</div>";
+    }
 
     if (p) {
       var total = p.timeout || 20;
