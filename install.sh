@@ -302,7 +302,11 @@ if [[ -z "$SPOOLMAN_URL" ]] && can_prompt; then
 fi
 [[ -n "$SPOOLMAN_URL" ]] || die "Spoolman URL unknown; pass --spoolman-url"
 SPOOLMAN_URL="${SPOOLMAN_URL%/}"
-[[ "$SPOOLMAN_URL" =~ ^https?://[^[:space:]]+$ ]] || die "bad Spoolman URL: $SPOOLMAN_URL"
+# tidy "http:///host", "host:port" and a trailing "/api"
+SPOOLMAN_URL="$(printf %s "$SPOOLMAN_URL" | sed -E 's#^(https?):/+#\1://#; s#/api$##')"
+[[ "$SPOOLMAN_URL" == http*://* ]] || SPOOLMAN_URL="http://$SPOOLMAN_URL"
+[[ "$SPOOLMAN_URL" =~ ^https?://[^/[:space:]]+(/[^[:space:]]*)?$ ]] \
+  || die "bad Spoolman URL: $SPOOLMAN_URL (expected http://host:port)"
 
 if [[ -z "$TIMEOUT" ]]; then
   while IFS= read -r f; do

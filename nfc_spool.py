@@ -46,9 +46,8 @@ def _required_schema() -> int:
 class NfcSpool:
     def __init__(self, config: ConfigHelper) -> None:
         self.server = config.get_server()
-        self.spoolman_url = config.get(
-            "spoolman_url", "http://localhost:7912"
-        ).rstrip("/")
+        self.spoolman_url = self._clean_url(
+            config.get("spoolman_url", "http://localhost:7912"))
         # Keep this equal to pending_spool_id_timeout in Happy Hare's
         # mmu_parameters.cfg. It only drives the countdown shown in the UI.
         self.pending_timeout = config.getfloat("pending_timeout", 20., above=0.)
@@ -76,13 +75,32 @@ class NfcSpool:
             raise ValueError("not a valid tag UID")
         return uid
 
+    @staticmethod
+    def _clean_url(raw: str) -> str:
+        # Accept "http:///host:port", "host:port", trailing "/" or "/api".
+        url = raw.strip().rstrip("/")
+        m = re.match(r"^(https?):/*(.*)$", url, re.I)
+        scheme, rest = (m.group(1).lower(), m.group(2)) if m else ("http", url)
+        rest = rest.lstrip("/")
+        if rest.endswith("/api"):
+            rest = rest[:-4]
+        return f"{scheme}://{rest}"
+
     async def _lookup_spool(self, uid: str) -> Optional[Dict[str, Any]]:
         client = self.server.lookup_component("http_client")
         url = f"{self.spoolman_url}/api/v1/spool?tag={uid}"
         resp = await client.get(
             url, connect_timeout=5., request_timeout=5., enable_cache=False
         )
-        resp.raise_for_status()
+        if resp.has_error():
+            err = getattr(resp, "error", None) or getattr(resp, "_error", None)
+            code = getattr(resp, "status_code", 0)
+            if code in (400, 404, 422):
+                raise Exception(
+                    f"Spoolman at {self.spoolman_url} answered {code}. "
+                    "Tag lookup needs Spoolman v0.27.0 or newer.")
+            raise Exception(f"can't reach Spoolman at {self.spoolman_url} "
+                            f"({type(err).__name__}: {err})")
         data = resp.json()
         if isinstance(data, list):
             return data[0] if data else None
