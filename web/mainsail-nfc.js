@@ -212,8 +212,18 @@
   });
 
   // ---------- render -------------------------------------------------------
+  // Always shown inside the MMU panel (so it's clear the add-on loaded).
+  // The floating fallback only appears when there's something to act on.
   function visible() {
-    return HAS_NFC || !!pendingSpool() || state.updateRequired;
+    return !!floatBox || isInPanel() || HAS_NFC || !!pendingSpool() || state.updateRequired;
+  }
+  function isInPanel() {
+    var p = root.parentNode && root.parentNode.parentNode;
+    return !!(p && p.matches && p.matches(PANEL_SELECTOR));
+  }
+  function whyNoScan() {
+    if (!window.isSecureContext) return "Scanning needs HTTPS. Open Mainsail via its https:// address on an Android phone.";
+    return "Scanning works in Chrome on Android. Spools scanned on a phone show up here.";
   }
 
   function render() {
@@ -236,6 +246,8 @@
       html += "</span>";
     } else if (HAS_NFC && !state.scanning) {
       html += '<span class="nfc-sub">Tap a spool tag to assign it to the next gate you load.</span>';
+    } else if (!HAS_NFC) {
+      html += '<span class="nfc-sub">NFC spool scan: ' + esc(whyNoScan()) + "</span>";
     }
     if (floatBox) html += '<span style="flex:1"></span>' + btn("Close", 'data-act="close"', { size: "x-small" });
     html += "</div>";
@@ -293,7 +305,7 @@
       return;
     }
     if (!dashboardSince) dashboardSince = Date.now();
-    if (!floatBox && visible() && Date.now() - dashboardSince > FALLBACK_DELAY_MS) {
+    if (!floatBox && (HAS_NFC || !!pendingSpool() || state.updateRequired) && Date.now() - dashboardSince > FALLBACK_DELAY_MS) {
       floatBox = document.createElement("div");
       floatBox.className = "nfc-spool-float v-card v-sheet " + theme();
       floatBox.appendChild(root);
